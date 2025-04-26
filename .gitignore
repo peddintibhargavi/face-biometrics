@@ -1,0 +1,11 @@
+Face Biometrics
+.vscode
+
+common/__pycache__/
+
+dist/
+
+FaceUnimodel/__pycache__/
+FaceUnimodel/__init__.py
+
+server/venv
