@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+python-multipart
+pydantic
+pymongo
+pillow
+numpy
+opencv-python
+mediapipe
+torch
+scikit-learn  # (if used inside one_parameter_defense or dot_compare)
