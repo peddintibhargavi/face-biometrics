@@ -283,6 +283,72 @@ async def enroll_user_multiple(
     if len(face_images) < 3:
         raise HTTPException(status_code=400, detail="At least 3 face images are required")
 
+    # Process the first image to check for existing enrollment
+    try:
+        # Handle both formats: with data:image/jpeg;base64 prefix or without
+        check_image_data = face_images[0]
+        if ',' in check_image_data:
+            check_image_data = check_image_data.split(',')[1]  # Remove base64 prefix if present
+        
+        # Decode base64 string to image for checking existing enrollment
+        check_image_bytes = base64.b64decode(check_image_data)
+        check_nparr = np.frombuffer(check_image_bytes, np.uint8)
+        check_img = cv2.imdecode(check_nparr, cv2.IMREAD_COLOR)
+        
+        if check_img is None:
+            raise ValueError("Could not decode image for enrollment check")
+        
+        # Save to temp file for processing
+        check_image_path = os.path.join(UPLOAD_DIR, f"check_enrollment_{uuid.uuid4()}.jpg")
+        cv2.imwrite(check_image_path, check_img)
+        
+        # Process image to extract verification embedding
+        raw_embedding = process_image(check_image_path)
+        verification_embedding = one_parameter_defense(raw_embedding, m=3, seed=1234)
+        
+        # Check against all enrolled users
+        MIN_SCORE_FOR_DUPLICATE = 2.0  # Same threshold used in authentication
+        existing_user = None
+        highest_score = 0
+        
+        for user_data in user_collection.find({"enrolled": True}):
+            user_id = user_data["user_id"]
+            try:
+                # Load user's enrolled data
+                enrolled_data = load_embedding(user_id)
+                
+                # Compare embeddings
+                is_match, score = verify_similarity(enrolled_data, verification_embedding)
+                
+                if is_match and score > highest_score:
+                    existing_user = user_data
+                    highest_score = score
+                    
+                    # Log potential duplicate
+                    print(f"Potential duplicate enrollment detected: {user_id} ({user_data.get('full_name', 'Unknown')}) with score: {score:.2f}")
+                    
+            except Exception as e:
+                print(f"Error checking against existing user {user_id}: {str(e)}")
+                continue
+                
+        # Clean up check image
+        background_tasks.add_task(cleanup_temp_files, check_image_path)
+        
+        # If match found above threshold, reject enrollment
+        if existing_user and highest_score > MIN_SCORE_FOR_DUPLICATE:
+            return EnrollmentResponse(
+                success=False,
+                message=f"Face already enrolled under name: {existing_user.get('full_name', 'Unknown')}. Please authenticate instead.",
+                user_id=existing_user["user_id"]
+            )
+            
+    except Exception as e:
+        if 'check_image_path' in locals():
+            background_tasks.add_task(cleanup_temp_files, check_image_path)
+        print(f"Error during duplicate check: {str(e)}")
+        # Continue with enrollment even if check fails (fail open for usability)
+
+    # If we get here, no duplicate was found or the check failed but we're continuing
     user_id = str(uuid.uuid4())
 
     # Create user in DB
